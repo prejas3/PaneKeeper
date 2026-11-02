@@ -31,6 +31,7 @@ pub struct Insets {
 pub struct Monitor {
     pub id: String,
     pub name: String,
+    pub bounds: Rect,
     pub work_area: Rect,
     pub dpi: u32,
     pub primary: bool,
@@ -173,6 +174,46 @@ pub fn clamp_rect(mut rect: Rect, area: Rect) -> Rect {
     rect
 }
 
+pub fn workspace_to_screen(rect: Rect, offset: (i32, i32)) -> Rect {
+    Rect {
+        left: rect.left + offset.0,
+        top: rect.top + offset.1,
+        right: rect.right + offset.0,
+        bottom: rect.bottom + offset.1,
+    }
+}
+
+pub fn screen_to_workspace(rect: Rect, offset: (i32, i32)) -> Rect {
+    workspace_to_screen(rect, (-offset.0, -offset.1))
+}
+
+fn primary_workspace_offset(monitors: &[Monitor]) -> (i32, i32) {
+    monitors
+        .iter()
+        .find(|monitor| monitor.primary)
+        .map(|monitor| {
+            (
+                monitor.work_area.left - monitor.bounds.left,
+                monitor.work_area.top - monitor.bounds.top,
+            )
+        })
+        .unwrap_or((0, 0))
+}
+
+pub fn target_normal_rect(saved: &WindowSnapshot, target: &Monitor) -> Rect {
+    if saved.monitor.id == target.id && saved.monitor.dpi == target.dpi {
+        clamp_rect(saved.normal_rect, target.work_area)
+    } else {
+        map_rect(
+            saved.normal_rect,
+            saved.monitor.work_area,
+            target.work_area,
+            saved.monitor.dpi,
+            target.dpi,
+        )
+    }
+}
+
 pub fn placement_from_frame(frame: Rect, insets: Insets, from_dpi: u32, to_dpi: u32) -> Rect {
     let scale = to_dpi.max(1) as f64 / from_dpi.max(1) as f64;
     let s = |value: i32| (value as f64 * scale).round() as i32;
@@ -209,9 +250,10 @@ mod platform {
             },
             WindowsAndMessaging::{
                 EnumWindows, GetClassNameW, GetDesktopWindow, GetShellWindow, GetWindowLongW,
-                GetWindowPlacement, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-                IsWindowVisible, SetWindowPlacement, GWL_EXSTYLE, MONITORINFOF_PRIMARY,
-                SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, WINDOWPLACEMENT, WS_EX_TOOLWINDOW,
+                GetWindowPlacement, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+                GetWindowThreadProcessId, IsWindowVisible, SetWindowPlacement, GWL_EXSTYLE,
+                MONITORINFOF_PRIMARY, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, WINDOWPLACEMENT,
+                WS_EX_TOOLWINDOW,
             },
         },
     };
@@ -233,6 +275,7 @@ mod platform {
     struct EnumState {
         own_pid: u32,
         process_ids: Option<HashSet<u32>>,
+        workspace_offset: (i32, i32),
         windows: Vec<WindowSnapshot>,
     }
 
@@ -291,7 +334,7 @@ mod platform {
         {
             frame = placement.rcNormalPosition;
         }
-        let normal = rect(placement.rcNormalPosition);
+        let normal = workspace_to_screen(rect(placement.rcNormalPosition), state.workspace_offset);
         let frame = rect(frame);
         let monitor = monitor_for_window(hwnd);
         let show_state = match placement.showCmd {
@@ -299,18 +342,29 @@ mod platform {
             value if value == SW_SHOWMINIMIZED as u32 => ShowState::Minimized,
             _ => ShowState::Normal,
         };
+        let frame_insets = if show_state == ShowState::Normal {
+            let mut window_rect: RECT = zeroed();
+            if GetWindowRect(hwnd, &mut window_rect) != 0 {
+                let window_rect = rect(window_rect);
+                Insets {
+                    left: frame.left - window_rect.left,
+                    top: frame.top - window_rect.top,
+                    right: window_rect.right - frame.right,
+                    bottom: window_rect.bottom - frame.bottom,
+                }
+            } else {
+                Insets::default()
+            }
+        } else {
+            Insets::default()
+        };
         state.windows.push(WindowSnapshot {
             exe,
             class: wide(&class),
             title: wide(&title),
             normal_rect: normal,
             frame_rect: frame,
-            frame_insets: Insets {
-                left: frame.left - normal.left,
-                top: frame.top - normal.top,
-                right: normal.right - frame.right,
-                bottom: normal.bottom - frame.bottom,
-            },
+            frame_insets,
             show_state,
             monitor,
             z_order: state.windows.len(),
@@ -354,6 +408,7 @@ mod platform {
         Monitor {
             id,
             name,
+            bounds: rect(info.monitorInfo.rcMonitor),
             work_area: rect(info.monitorInfo.rcWork),
             dpi: dpi_x,
             primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
@@ -387,10 +442,12 @@ mod platform {
 
     pub fn capture() -> Result<Vec<WindowSnapshot>, String> {
         unsafe {
-            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            enable_dpi_awareness();
+            let monitors = connected_monitors();
             let mut state = EnumState {
                 own_pid: GetCurrentProcessId(),
                 process_ids: None,
+                workspace_offset: primary_workspace_offset(&monitors),
                 windows: Vec::new(),
             };
             if EnumWindows(Some(enum_window), &mut state as *mut _ as LPARAM) == 0 {
@@ -433,10 +490,12 @@ mod platform {
 
     pub fn restore(saved: &[WindowSnapshot]) -> Vec<RestoreResult> {
         unsafe {
+            enable_dpi_awareness();
             let mut live = (GetCurrentProcessId(), Vec::new());
             EnumWindows(Some(enum_live), &mut live as *mut _ as LPARAM);
             let matches = match_windows(saved, &live.1);
             let monitors = connected_monitors();
+            let workspace_offset = primary_workspace_offset(&monitors);
             saved
                 .iter()
                 .enumerate()
@@ -453,23 +512,8 @@ mod platform {
                         .find(|monitor| monitor.id == snapshot.monitor.id)
                         .or_else(|| monitors.iter().find(|monitor| monitor.primary))
                         .unwrap_or(&current_monitor);
-                    let frame = if target_monitor.id == snapshot.monitor.id {
-                        clamp_rect(snapshot.frame_rect, target_monitor.work_area)
-                    } else {
-                        map_rect(
-                            snapshot.frame_rect,
-                            snapshot.monitor.work_area,
-                            target_monitor.work_area,
-                            snapshot.monitor.dpi,
-                            target_monitor.dpi,
-                        )
-                    };
-                    let target = placement_from_frame(
-                        frame,
-                        snapshot.frame_insets,
-                        snapshot.monitor.dpi,
-                        target_monitor.dpi,
-                    );
+                    let target_screen = target_normal_rect(snapshot, target_monitor);
+                    let target = screen_to_workspace(target_screen, workspace_offset);
                     let mut placement: WINDOWPLACEMENT = zeroed();
                     placement.length = size_of::<WINDOWPLACEMENT>() as u32;
                     if GetWindowPlacement(hwnd, &mut placement) == 0 {
@@ -531,23 +575,35 @@ mod platform {
 
     #[cfg(test)]
     pub unsafe fn capture_processes(process_ids: &[u32]) -> Vec<WindowSnapshot> {
+        enable_dpi_awareness();
+        let monitors = connected_monitors();
         let mut state = EnumState {
             own_pid: GetCurrentProcessId(),
             process_ids: Some(process_ids.iter().copied().collect()),
+            workspace_offset: primary_workspace_offset(&monitors),
             windows: Vec::new(),
         };
         EnumWindows(Some(enum_window), &mut state as *mut _ as LPARAM);
         state.windows
     }
+
+    pub fn enable_dpi_awareness() {
+        unsafe {
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
+    }
 }
 
 #[cfg(windows)]
-pub use platform::{capture, restore};
+pub use platform::{capture, enable_dpi_awareness, restore};
 
 #[cfg(not(windows))]
 pub fn capture() -> Result<Vec<WindowSnapshot>, String> {
     Err("WindowsKeeper only supports Windows".into())
 }
+
+#[cfg(not(windows))]
+pub fn enable_dpi_awareness() {}
 
 #[cfg(not(windows))]
 pub fn restore(saved: &[WindowSnapshot]) -> Vec<RestoreResult> {
@@ -568,6 +624,7 @@ mod tests {
         Monitor {
             id: id.into(),
             name: id.into(),
+            bounds: area,
             work_area: area,
             dpi,
             primary: true,
@@ -712,6 +769,82 @@ mod tests {
             ),
             area
         );
+    }
+
+    #[test]
+    fn top_taskbar_workspace_coordinates_round_trip() {
+        let workspace = Rect {
+            left: 100,
+            top: 100,
+            right: 900,
+            bottom: 700,
+        };
+        let screen = workspace_to_screen(workspace, (0, 40));
+        assert_eq!(
+            screen,
+            Rect {
+                left: 100,
+                top: 140,
+                right: 900,
+                bottom: 740
+            }
+        );
+        assert_eq!(screen_to_workspace(screen, (0, 40)), workspace);
+    }
+
+    #[test]
+    fn minimized_and_maximized_normal_rects_stay_visible_and_keep_size() {
+        let source_area = Rect {
+            left: 0,
+            top: 40,
+            right: 1920,
+            bottom: 1080,
+        };
+        let same = monitor("saved", source_area, 96);
+        let missing_target = monitor(
+            "replacement",
+            Rect {
+                left: 1920,
+                top: 0,
+                right: 3840,
+                bottom: 1040,
+            },
+            96,
+        );
+        for state in [ShowState::Minimized, ShowState::Maximized] {
+            let mut snapshot = saved("Stateful", 0);
+            snapshot.show_state = state;
+            snapshot.monitor = same.clone();
+            snapshot.normal_rect = Rect {
+                left: 100,
+                top: 140,
+                right: 900,
+                bottom: 740,
+            };
+            snapshot.frame_rect = Rect {
+                left: -32_000,
+                top: -32_000,
+                right: -31_840,
+                bottom: -31_972,
+            };
+            snapshot.frame_insets = Insets {
+                left: -32_100,
+                top: -32_140,
+                right: 32_740,
+                bottom: 32_712,
+            };
+
+            let on_same = target_normal_rect(&snapshot, &same);
+            let on_missing = target_normal_rect(&snapshot, &missing_target);
+            for (rect, area) in [
+                (on_same, same.work_area),
+                (on_missing, missing_target.work_area),
+            ] {
+                assert_eq!((rect.width(), rect.height()), (800, 600));
+                assert!(rect.left >= area.left && rect.top >= area.top);
+                assert!(rect.right <= area.right && rect.bottom <= area.bottom);
+            }
+        }
     }
 
     #[cfg(windows)]
