@@ -109,9 +109,9 @@ mod platform {
             let thread_hwnd = hwnd.clone();
             let (ready_tx, ready_rx) = mpsc::channel();
             thread::Builder::new()
-                .name("windowskeeper-events".into())
+                .name("panekeeper-events".into())
                 .spawn(move || unsafe {
-                    let class: Vec<u16> = "WindowsKeeperEvents\0".encode_utf16().collect();
+                    let class: Vec<u16> = "PaneKeeperEvents\0".encode_utf16().collect();
                     let instance = GetModuleHandleW(null());
                     let wc = WNDCLASSW {
                         style: CS_HREDRAW | CS_VREDRAW,

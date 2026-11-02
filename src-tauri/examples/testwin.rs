@@ -1,5 +1,5 @@
 // CCS/1 M:test-helper | PURPOSE:test-owned windows for the live tests and scripts/e2e-auto.mjs
-// SEC:every command finds windows by class "WindowsKeeperTestWindow" only, so it can never touch anyone else's window
+// SEC:every command finds windows by class "PaneKeeperTestWindow" only, so it can never touch anyone else's window
 //
 //   testwin window <title> [l t r b] [max|min]   open a test window (window rect, screen coords)
 //   testwin query <title>                        print {"state","normal":[l,t,r,b],"pid"} or {"found":false}
@@ -39,7 +39,7 @@ mod win {
         },
     };
 
-    const CLASS: &str = "WindowsKeeperTestWindow";
+    const CLASS: &str = "PaneKeeperTestWindow";
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(Some(0)).collect()
@@ -77,7 +77,7 @@ mod win {
         unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
         let args: Vec<String> = std::env::args().skip(1).collect();
         let cmd = args.first().map(String::as_str).unwrap_or("window");
-        let title = args.get(1).cloned().unwrap_or_else(|| "WindowsKeeper test window".into());
+        let title = args.get(1).cloned().unwrap_or_else(|| "PaneKeeper test window".into());
         unsafe {
             match cmd {
                 "window" => window(&title, &args[2.min(args.len())..]),

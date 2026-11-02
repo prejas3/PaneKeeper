@@ -41,7 +41,7 @@ function render() {
   const current = layout();
   app.innerHTML = `
     <nav class="side" aria-label="Layouts">
-      <div class="brand">${logo()}<span>WindowsKeeper</span></div>
+      <div class="brand">${logo()}<span>PaneKeeper</span></div>
       <button class="primary save" data-act="capture">${ic.plus}<span>Save current layout</span></button>
       ${store.layouts.length ? `<div class="side-label">Layouts</div>` : ""}
       <ul class="layouts">${store.layouts
@@ -76,10 +76,10 @@ function emptyPage() {
     `<li class="step"><span class="step-n">${n}</span><span class="grow"><span class="name">${title}</span><span class="sub">${text}</span></span></li>`;
   return `<section class="empty">
     <h1>Bring your windows back in one keystroke</h1>
-    <p class="lede">WindowsKeeper remembers where every app window sits, on every monitor, and puts it all back when you ask.</p>
+    <p class="lede">PaneKeeper remembers where every app window sits, on every monitor, and puts it all back when you ask.</p>
     <ol class="steps">
       ${step(1, "Arrange your windows", "Browser, editor, chat: put each where you like it, on any monitor.")}
-      ${step(2, "Save current layout", "WindowsKeeper notes each window's place, size and monitor.")}
+      ${step(2, "Save current layout", "PaneKeeper notes each window's place, size and monitor.")}
       ${step(3, "Press the shortcut to bring it back", "Ctrl+Alt+1 for your first layout, from any app, even after a dock or a restart.")}
     </ol>
     <button class="primary big" data-act="capture">${ic.plus}<span>Save current layout</span></button>
@@ -213,13 +213,13 @@ function settingsPage() {
   return `
     <header class="head"><h1>Settings</h1></header>
     <ul class="card settings">
-      ${row("Start with Windows", "WindowsKeeper starts in the tray when you sign in.", toggle(s.autostart, "set-autostart", "", "Start with Windows"))}
+      ${row("Start with Windows", "PaneKeeper starts in the tray when you sign in.", toggle(s.autostart, "set-autostart", "", "Start with Windows"))}
       ${row("Auto-restore on display change", "When monitors connect or disconnect, restore the layout bound to that monitor setup.", toggle(s.autoRestore, "set-auto", "", "Auto-restore on display change"))}
       ${row("Pause", "Shortcuts and auto-restore do nothing while paused. Restore now still works.", toggle(s.paused, "set-paused", "", "Pause"))}
-      ${row("Launch wait", "How long a launched app gets to open its window before WindowsKeeper moves on.", stepper(s.launchWaitSeconds))}
+      ${row("Launch wait", "How long a launched app gets to open its window before PaneKeeper moves on.", stepper(s.launchWaitSeconds))}
       ${row("Theme", "Follow Windows, or pick one.", `<span class="seg" role="radiogroup" aria-label="Theme">${theme}</span>`)}
     </ul>
-    <p class="sub about">WindowsKeeper 0.1.0 · MIT licence · only moves and resizes windows, never closes them.</p>`;
+    <p class="sub about">PaneKeeper 0.1.0 · MIT licence · only moves and resizes windows, never closes them.</p>`;
 }
 
 // ---------- controls ----------

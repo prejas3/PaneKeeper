@@ -10,14 +10,16 @@ import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
-const EXE = process.argv[2] ?? here("../src-tauri/target/release/windowskeeper.exe");
+const EXE = process.argv[2] ?? here("../src-tauri/target/release/panekeeper.exe");
 const TW = process.argv[3] ?? here("../src-tauri/target/release/examples/testwin.exe");
 const STAMP = Date.now();
-const ROOT = path.join(os.tmpdir(), `WindowsKeeper-Test-${STAMP}`);
+const ROOT = path.join(os.tmpdir(), `PaneKeeper-Test-${STAMP}`);
 const P = (...p) => path.join(ROOT, ...p);
 const PREFIX = `wk-e2e-${STAMP}`;
-const LAUNCHED = "WindowsKeeper test window"; // testwin's title when started without arguments
+const LAUNCHED = "PaneKeeper test window"; // testwin's title when started without arguments
 const SHORTCUT = "Ctrl+Alt+Shift+F9"; // unusual on purpose: no clash with the default Ctrl+Alt+1…9
+const localDir = path.join(process.env.LOCALAPPDATA ?? os.tmpdir(), "com.szymonjankiewicz.panekeeper");
+const localExisted = fs.existsSync(localDir);
 const results = [];
 const check = (name, ok, detail = "") => {
   results.push({ name, ok: !!ok, detail });
@@ -131,7 +133,7 @@ async function stop() {
   await until(async () => proc.exitCode !== null && !(await targets()), 10000);
 }
 const click = (sel) => `const el = document.querySelector(${JSON.stringify(sel)}); if (!el) throw new Error("missing " + ${JSON.stringify(sel)}); el.click();`;
-const store = () => JSON.parse(fs.readFileSync(P("AppData/WindowsKeeper/layouts.json"), "utf8"));
+const store = () => JSON.parse(fs.readFileSync(P("AppData/PaneKeeper/layouts.json"), "utf8"));
 const layout = () => store().layouts[0];
 const toastLike = (js, text) => until(() => js(`return __toasts.some((t) => t.startsWith(${JSON.stringify(text)}))`), 20000);
 const clearToasts = (js) => js(`__toasts.length = 0`);
@@ -161,7 +163,7 @@ try {
 
   // 1. save a layout, keep only the test windows, set the shortcut
   await js(click('[data-act="capture"]'));
-  await until(() => fs.existsSync(P("AppData/WindowsKeeper/layouts.json")) && layout()?.windows.length);
+  await until(() => fs.existsSync(P("AppData/PaneKeeper/layouts.json")) && layout()?.windows.length);
   for (;;) { // remove every captured window that isn't ours: the user's windows are never part of the test
     const removed = await js(`const row = [...document.querySelectorAll(".win")].find((r) => !r.querySelector(".sub").textContent.startsWith(${JSON.stringify(PREFIX)}));
       if (!row) return false; row.querySelector('[data-act="remove-window"]').click(); return true;`);
@@ -195,7 +197,7 @@ try {
   // 3. global shortcut while a test window has focus
   scramble();
   tw("focus", A.title);
-  const fg = await until(() => { const f = tw("foreground"); return f.class === "WindowsKeeperTestWindow" && f; }, 5000);
+  const fg = await until(() => { const f = tw("foreground"); return f.class === "PaneKeeperTestWindow" && f; }, 5000);
   check("3. another window has focus", fg, JSON.stringify(tw("foreground")));
   tw("keys", SHORTCUT);
   check("3. shortcut restores from another app", await inPlace(saved));
@@ -223,7 +225,7 @@ try {
   const left = Math.min(...monitors.map((m) => m.bounds[0])) - 4000;
   fakeA.monitor = { ...fakeA.monitor, id: "MONITOR\\FAKE0000\\e2e", name: "E2E gone", bounds: { left, top: 0, right: left + 1920, bottom: 1080 }, workArea: { left, top: 0, right: left + 1920, bottom: 1040 }, primary: false };
   fakeA.normalRect = { left: left + 1000, top: 500, right: left + 1900, bottom: 1030 };
-  fs.writeFileSync(P("AppData/WindowsKeeper/layouts.json"), JSON.stringify(edited, null, 1));
+  fs.writeFileSync(P("AppData/PaneKeeper/layouts.json"), JSON.stringify(edited, null, 1));
   ({ js, shot } = await launch());
   check("6. restart: layout and shortcut kept", await until(() => js(`return [...document.querySelectorAll(".nav-keys")].some((k) => k.textContent.replaceAll(" ", "") === ${JSON.stringify(SHORTCUT)})`)));
   check("5. missing monitor drawn dashed on the map", await until(() => js(`return document.querySelectorAll(".screen.missing").length === 1`)));
@@ -248,6 +250,10 @@ try {
   }
   for (const child of children) child.kill();
 }
+
+// Tauri creates an empty app folder in LOCALAPPDATA on start, even with WebView2 data redirected:
+// remove it when this run made it (never a real install's folder, which is not empty or was there before).
+if (!localExisted) try { fs.rmdirSync(localDir); } catch {}
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);

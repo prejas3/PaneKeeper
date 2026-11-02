@@ -1,3 +1,3 @@
 !macro NSIS_HOOK_PREUNINSTALL
-  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "WindowsKeeper"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "PaneKeeper"
 !macroend

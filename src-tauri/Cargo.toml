@@ -1,5 +1,5 @@
 [package]
-name = "windowskeeper"
+name = "panekeeper"
 version = "0.1.0"
 description = "Save and restore Windows app layouts"
 authors = ["Szymon Jankiewicz"]
@@ -7,7 +7,7 @@ license = "MIT"
 edition = "2021"
 
 [lib]
-name = "windowskeeper_lib"
+name = "panekeeper_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

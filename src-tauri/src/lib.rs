@@ -57,7 +57,7 @@ fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     let restore = restore.build().map_err(|e| e.to_string())?;
     let save = MenuItem::with_id(app, "save", "Save current layout…", true, None::<&str>)
         .map_err(|e| e.to_string())?;
-    let open = MenuItem::with_id(app, "open", "Open WindowsKeeper", true, None::<&str>)
+    let open = MenuItem::with_id(app, "open", "Open PaneKeeper", true, None::<&str>)
         .map_err(|e| e.to_string())?;
     let pause = CheckMenuItem::with_id(
         app,
@@ -388,7 +388,7 @@ pub fn run() {
                         .cloned()
                         .ok_or("missing app icon")?,
                 )
-                .tooltip("WindowsKeeper")
+                .tooltip("PaneKeeper")
                 .menu(&menu)
                 .on_menu_event(move |app, event| {
                     let id = event.id.as_ref();
@@ -466,5 +466,5 @@ pub fn run() {
             bind_layout
         ])
         .run(tauri::generate_context!())
-        .expect("error while running WindowsKeeper");
+        .expect("error while running PaneKeeper");
 }

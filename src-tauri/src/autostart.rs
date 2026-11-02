@@ -14,7 +14,7 @@ mod platform {
         let path = wide(std::ffi::OsStr::new(
             "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
         ));
-        let name = wide(std::ffi::OsStr::new("WindowsKeeper"));
+        let name = wide(std::ffi::OsStr::new("PaneKeeper"));
         let mut key: HKEY = std::ptr::null_mut();
         let status = unsafe {
             RegCreateKeyExW(

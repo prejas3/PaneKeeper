@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "WindowsKeeper",
+  "productName": "PaneKeeper",
   "version": "0.1.0",
-  "identifier": "com.szymonjankiewicz.windowskeeper",
+  "identifier": "com.szymonjankiewicz.panekeeper",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1431",
@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [{
-      "title": "WindowsKeeper",
+      "title": "PaneKeeper",
       "width": 960,
       "height": 640,
       "minWidth": 420,

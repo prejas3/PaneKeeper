@@ -99,7 +99,7 @@ pub fn app_root() -> Result<PathBuf, String> {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .ok_or_else(|| "APPDATA is unavailable".into())
-        .map(|root| root.join("WindowsKeeper"))
+        .map(|root| root.join("PaneKeeper"))
 }
 
 pub fn load(path: &Path) -> LayoutStore {
@@ -107,7 +107,7 @@ pub fn load(path: &Path) -> LayoutStore {
         return LayoutStore::default();
     };
     serde_json::from_str(&text).unwrap_or_else(|error| {
-        eprintln!("windowskeeper: {}: {error}", path.display());
+        eprintln!("panekeeper: {}: {error}", path.display());
         let _ = fs::rename(path, path.with_extension("json.bad"));
         LayoutStore::default()
     })
@@ -304,7 +304,7 @@ mod tests {
         fn new() -> Self {
             static NEXT: AtomicUsize = AtomicUsize::new(0);
             let path = std::env::temp_dir().join(format!(
-                "windowskeeper-layout-test-{}-{}",
+                "panekeeper-layout-test-{}-{}",
                 new_id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
