@@ -70,8 +70,7 @@ mod platform {
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, KillTimer,
                 PostMessageW, RegisterClassW, SetTimer, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-                MSG, WM_APP, WM_DESTROY, WM_DISPLAYCHANGE, WM_HOTKEY, WM_TIMER,
-                WNDCLASSW,
+                MSG, WM_APP, WM_DESTROY, WM_DISPLAYCHANGE, WM_HOTKEY, WM_TIMER, WNDCLASSW,
             },
         },
     };
@@ -163,14 +162,6 @@ mod platform {
                 }
             }
         }
-
-        #[cfg(test)]
-        pub fn trigger_hotkey(&self, index: usize) {
-            let hwnd = *self.hwnd.lock().unwrap() as HWND;
-            unsafe {
-                PostMessageW(hwnd, WM_HOTKEY, index + 1, 0);
-            }
-        }
     }
 
     fn shortcut_bindings(layouts: &[Layout]) -> Vec<(String, String)> {
@@ -187,7 +178,7 @@ mod platform {
 
     unsafe fn register_all(hwnd: HWND) {
         let Some(context) = CONTEXT.get() else { return };
-        let layouts = context.layouts.lock().unwrap();
+        let layouts = context.layouts.lock().unwrap().clone();
         for (index, (layout_id, shortcut)) in layouts.iter().enumerate() {
             let id = index as i32 + 1;
             if let Ok(hotkey) = parse_hotkey(shortcut) {
@@ -221,12 +212,14 @@ mod platform {
         match message {
             WM_HOTKEY => {
                 if let Some(context) = CONTEXT.get() {
-                    if let Some((layout_id, _)) =
-                        context.layouts.lock().unwrap().get(wparam as usize - 1)
-                    {
-                        (context.callback)(ServiceEvent::RestoreLayout {
-                            layout_id: layout_id.clone(),
-                        });
+                    let layout_id = context
+                        .layouts
+                        .lock()
+                        .unwrap()
+                        .get(wparam as usize - 1)
+                        .map(|(layout_id, _)| layout_id.clone());
+                    if let Some(layout_id) = layout_id {
+                        (context.callback)(ServiceEvent::RestoreLayout { layout_id });
                     }
                 }
                 0
@@ -377,15 +370,20 @@ mod tests {
         assert_ne!(foreground, std::process::id());
         let (tx, rx) = mpsc::channel();
         let restore = layout.clone();
-        let service = EventService::start(&[layout], move |event| {
-            if matches!(event, ServiceEvent::RestoreLayout { .. }) {
+        let _service = EventService::start(&[layout], move |event| match event {
+            ServiceEvent::RestoreLayout { .. } => {
                 let _ = layouts::restore_layout(&restore);
-                let _ = tx.send(());
+                let _ = tx.send(Ok(()));
             }
+            ServiceEvent::ShortcutConflict { .. } => {
+                let _ = tx.send(Err("shortcut conflict"));
+            }
+            ServiceEvent::DisplayChanged => {}
         })
         .unwrap();
-        service.trigger_hotkey(0);
-        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
+        assert!(rx.try_recv().is_err());
+        send_ctrl_alt_9().unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), Ok(()));
         assert!(wait(&|| {
             let current = unsafe { windows::test_capture_processes(&pids) };
             saved.iter().all(|expected| {
@@ -404,5 +402,46 @@ mod tests {
             let _ = child.wait();
         }
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    fn send_ctrl_alt_9() -> Result<(), String> {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
+
+        fn key(vk: u16, up: bool) -> INPUT {
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: vk,
+                        wScan: 0,
+                        dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            }
+        }
+
+        let inputs = [
+            key(VK_CONTROL, false),
+            key(VK_MENU, false),
+            key(b'9' as u16, false),
+            key(b'9' as u16, true),
+            key(VK_MENU, true),
+            key(VK_CONTROL, true),
+        ];
+        let sent = unsafe {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_ptr(),
+                std::mem::size_of::<INPUT>() as i32,
+            )
+        };
+        if sent == inputs.len() as u32 {
+            Ok(())
+        } else {
+            Err(format!("SendInput sent {sent}/{} events", inputs.len()))
+        }
     }
 }

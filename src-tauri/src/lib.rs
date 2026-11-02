@@ -97,7 +97,11 @@ fn list_layouts(state: State<'_, AppState>) -> Result<LayoutStore, String> {
 
 #[tauri::command]
 fn shortcut_conflicts(state: State<'_, AppState>) -> Result<Vec<(String, String)>, String> {
-    Ok(state.shortcut_conflicts.lock().map_err(|e| e.to_string())?.clone())
+    Ok(state
+        .shortcut_conflicts
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone())
 }
 
 #[tauri::command]
@@ -235,7 +239,15 @@ fn restore_by_id(app: &AppHandle, id: &str) -> Result<(), String> {
 fn handle_service_event(app: AppHandle, event: ServiceEvent) {
     match event {
         ServiceEvent::RestoreLayout { layout_id } => {
-            let _ = restore_by_id(&app, &layout_id);
+            let paused = app
+                .state::<AppState>()
+                .store
+                .lock()
+                .map(|store| store.settings.paused)
+                .unwrap_or(true);
+            if !paused {
+                let _ = restore_by_id(&app, &layout_id);
+            }
         }
         ServiceEvent::ShortcutConflict {
             layout_id,
