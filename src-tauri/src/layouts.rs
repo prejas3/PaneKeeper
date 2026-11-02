@@ -41,15 +41,34 @@ pub struct Layout {
     pub name: String,
     pub shortcut: Option<String>,
     pub monitor_fingerprint: String,
+    /// Auto-restore picks this layout when the connected monitor set matches its fingerprint.
+    #[serde(default)]
+    pub bound: bool,
     pub windows: Vec<LayoutWindow>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub auto_restore: bool,
     pub paused: bool,
     pub autostart: bool,
+    /// How long a launched app gets to show its window (seconds).
+    pub launch_wait_seconds: u64,
+    /// "system", "light" or "dark".
+    pub theme: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            auto_restore: false,
+            paused: false,
+            autostart: false,
+            launch_wait_seconds: 8,
+            theme: "system".into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +162,7 @@ pub fn capture_layout(name: String, shortcut: Option<String>) -> Result<Layout, 
         name,
         shortcut,
         monitor_fingerprint: monitor_fingerprint(&windows::monitors()),
+        bound: false,
         windows: windows
             .into_iter()
             .map(|window| LayoutWindow {
@@ -152,6 +172,45 @@ pub fn capture_layout(name: String, shortcut: Option<String>) -> Result<Layout, 
             })
             .collect(),
     })
+}
+
+/// Fresh capture for an existing layout: windows found again keep their include/launch choices.
+pub fn update_from_current(layout: &Layout) -> Result<Layout, String> {
+    Ok(merge_capture(layout, windows::capture()?, monitor_fingerprint(&windows::monitors())))
+}
+
+pub fn merge_capture(layout: &Layout, captured: Vec<WindowSnapshot>, fingerprint: String) -> Layout {
+    let live: Vec<windows::LiveWindow> = captured
+        .iter()
+        .map(|window| windows::LiveWindow {
+            handle: 0,
+            process_id: 0,
+            exe: window.exe.clone(),
+            class: window.class.clone(),
+            title: window.title.clone(),
+            z_order: window.z_order,
+        })
+        .collect();
+    let old: Vec<WindowSnapshot> = layout.windows.iter().map(|entry| entry.window.clone()).collect();
+    let mut carried: Vec<Option<&LayoutWindow>> = vec![None; captured.len()];
+    for (old_index, new_index) in windows::match_windows(&old, &live).into_iter().enumerate() {
+        if let Some(new_index) = new_index {
+            carried[new_index] = Some(&layout.windows[old_index]);
+        }
+    }
+    Layout {
+        monitor_fingerprint: fingerprint,
+        windows: captured
+            .into_iter()
+            .zip(carried)
+            .map(|(window, old)| LayoutWindow {
+                window,
+                included: old.map_or(true, |old| old.included),
+                launch: old.and_then(|old| old.launch.clone()),
+            })
+            .collect(),
+        ..layout.clone()
+    }
 }
 
 pub fn restore_layout(layout: &Layout) -> Vec<RestoreResult> {
@@ -276,6 +335,7 @@ mod tests {
                 name: "Work".into(),
                 shortcut: Some("Ctrl+Alt+1".into()),
                 monitor_fingerprint: "A".into(),
+                bound: true,
                 windows: vec![LayoutWindow {
                     window: window("A"),
                     included: true,
@@ -309,6 +369,46 @@ mod tests {
         let a = window("A").monitor;
         let b = window("B").monitor;
         assert_eq!(monitor_fingerprint(&[b.clone(), a, b]), "A|B");
+    }
+
+    #[test]
+    fn old_store_without_new_fields_loads_with_defaults() {
+        let temp = Temp::new();
+        let path = temp.0.join("layouts.json");
+        fs::write(&path, r#"{"layouts":[],"settings":{"autoRestore":true}}"#).unwrap();
+        let store = load(&path);
+        assert!(store.settings.auto_restore);
+        assert_eq!(store.settings.launch_wait_seconds, 8);
+        assert_eq!(store.settings.theme, "system");
+    }
+
+    #[test]
+    fn update_from_current_keeps_choices_of_windows_found_again() {
+        let mut kept = window("A");
+        kept.title = "Docs".into();
+        let layout = Layout {
+            id: "work".into(),
+            name: "Work".into(),
+            shortcut: Some("Ctrl+Alt+1".into()),
+            monitor_fingerprint: "A".into(),
+            bound: true,
+            windows: vec![LayoutWindow {
+                window: kept.clone(),
+                included: false,
+                launch: Some(LaunchConfig::default()),
+            }],
+        };
+        let mut fresh = window("B");
+        fresh.title = "New".into();
+        fresh.class = "Other".into();
+        let mut moved = kept.clone();
+        moved.normal_rect.left = 99;
+        let merged = merge_capture(&layout, vec![fresh, moved], "B".into());
+        assert_eq!((merged.id.as_str(), merged.name.as_str(), merged.bound), ("work", "Work", true));
+        assert_eq!(merged.monitor_fingerprint, "B");
+        assert!(merged.windows[0].included && merged.windows[0].launch.is_none());
+        assert!(!merged.windows[1].included && merged.windows[1].launch.is_some());
+        assert_eq!(merged.windows[1].window.normal_rect.left, 99);
     }
 
     #[test]

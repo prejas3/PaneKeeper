@@ -6,6 +6,8 @@ use serde::Serialize;
 pub enum ServiceEvent {
     RestoreLayout { layout_id: String },
     ShortcutConflict { layout_id: String, shortcut: String },
+    /// Registration finished; the conflict list is complete.
+    ShortcutsRegistered,
     DisplayChanged,
 }
 
@@ -191,6 +193,7 @@ mod platform {
             }
         }
         *context.registered.lock().unwrap() = layouts.len();
+        (context.callback)(ServiceEvent::ShortcutsRegistered);
     }
 
     unsafe fn unregister_all(hwnd: HWND) {
@@ -342,6 +345,7 @@ mod tests {
             name: "Live".into(),
             shortcut: Some("Ctrl+Alt+9".into()),
             monitor_fingerprint: layouts::monitor_fingerprint(&windows::monitors()),
+            bound: false,
             windows: saved
                 .iter()
                 .cloned()
@@ -378,7 +382,7 @@ mod tests {
             ServiceEvent::ShortcutConflict { .. } => {
                 let _ = tx.send(Err("shortcut conflict"));
             }
-            ServiceEvent::DisplayChanged => {}
+            ServiceEvent::ShortcutsRegistered | ServiceEvent::DisplayChanged => {}
         })
         .unwrap();
         assert!(rx.try_recv().is_err());

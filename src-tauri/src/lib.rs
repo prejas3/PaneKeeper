@@ -1,5 +1,6 @@
 pub mod autostart;
 pub mod events;
+pub mod icons;
 pub mod layouts;
 pub mod windows;
 
@@ -201,6 +202,71 @@ fn save_settings(
 }
 
 #[tauri::command]
+fn monitors() -> Vec<windows::Monitor> {
+    windows::monitors()
+}
+
+#[tauri::command]
+fn preview_layout(layout: Layout) -> Vec<Option<windows::Landing>> {
+    let saved: Vec<_> = layout.windows.iter().map(|entry| entry.window.clone()).collect();
+    windows::preview(&saved, &windows::monitors())
+}
+
+#[tauri::command]
+fn app_icon(exe: String) -> Option<icons::Icon> {
+    icons::app_icon(&exe)
+}
+
+#[tauri::command]
+fn update_layout(id: String, state: State<'_, AppState>, app: AppHandle) -> Result<Layout, String> {
+    let current = find_layout(&state, &id)?;
+    let updated = layouts::update_from_current(&current)?;
+    replace_layout(&state, updated.clone())?;
+    refresh_tray(&app);
+    Ok(updated)
+}
+
+#[tauri::command]
+fn bind_layout(
+    id: String,
+    bound: bool,
+    state: State<'_, AppState>,
+) -> Result<Layout, String> {
+    let mut layout = find_layout(&state, &id)?;
+    layout.bound = bound;
+    if bound {
+        layout.monitor_fingerprint = layouts::monitor_fingerprint(&windows::monitors());
+    }
+    replace_layout(&state, layout.clone())?;
+    Ok(layout)
+}
+
+fn find_layout(state: &AppState, id: &str) -> Result<Layout, String> {
+    state
+        .store
+        .lock()
+        .map_err(|e| e.to_string())?
+        .layouts
+        .iter()
+        .find(|layout| layout.id == id)
+        .cloned()
+        .ok_or_else(|| "layout not found".into())
+}
+
+fn replace_layout(state: &AppState, layout: Layout) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        let slot = store
+            .layouts
+            .iter_mut()
+            .find(|item| item.id == layout.id)
+            .ok_or("layout not found")?;
+        *slot = layout;
+    }
+    persist(state)
+}
+
+#[tauri::command]
 fn restore_layout(id: String, app: AppHandle) -> Result<(), String> {
     restore_by_id(&app, &id)
 }
@@ -216,6 +282,17 @@ fn restore_by_id(app: &AppHandle, id: &str) -> Result<(), String> {
         .find(|layout| layout.id == id)
         .cloned()
         .ok_or("layout not found")?;
+    let wait = app
+        .state::<AppState>()
+        .store
+        .lock()
+        .map_err(|e| e.to_string())?
+        .settings
+        .launch_wait_seconds;
+    let mut layout = layout;
+    for launch in layout.windows.iter_mut().filter_map(|entry| entry.launch.as_mut()) {
+        launch.wait_seconds = wait;
+    }
     let app = app.clone();
     thread::spawn(move || {
         let results = layouts::restore_layout(&layout);
@@ -258,6 +335,9 @@ fn handle_service_event(app: AppHandle, event: ServiceEvent) {
             }
             let _ = app.emit("shortcut-conflict", (layout_id, shortcut));
         }
+        ServiceEvent::ShortcutsRegistered => {
+            let _ = app.emit("shortcuts-registered", ());
+        }
         ServiceEvent::DisplayChanged => {
             let state = app.state::<AppState>();
             let store = match state.store.lock() {
@@ -271,7 +351,7 @@ fn handle_service_event(app: AppHandle, event: ServiceEvent) {
             if let Some(layout) = store
                 .layouts
                 .iter()
-                .find(|layout| layout.monitor_fingerprint == fingerprint)
+                .find(|layout| layout.bound && layout.monitor_fingerprint == fingerprint)
             {
                 let _ = restore_by_id(&app, &layout.id);
             }
@@ -327,7 +407,11 @@ pub fn run() {
                         return;
                     }
                     match id {
-                        "save" | "open" => show_main(app),
+                        "open" => show_main(app),
+                        "save" => {
+                            show_main(app);
+                            let _ = app.emit("save-requested", ());
+                        }
                         "pause" => {
                             let state = app.state::<AppState>();
                             if let Ok(mut store) = state.store.lock() {
@@ -335,6 +419,7 @@ pub fn run() {
                             }
                             let _ = persist(&state);
                             refresh_tray(app);
+                            let _ = app.emit("store-changed", ());
                         }
                         "autostart" => {
                             let state = app.state::<AppState>();
@@ -351,6 +436,7 @@ pub fn run() {
                             }
                             let _ = persist(&state);
                             refresh_tray(app);
+                            let _ = app.emit("store-changed", ());
                         }
                         "quit" => app.exit(0),
                         _ => {}
@@ -382,7 +468,12 @@ pub fn run() {
             duplicate_layout,
             delete_layout,
             save_settings,
-            restore_layout
+            restore_layout,
+            monitors,
+            preview_layout,
+            app_icon,
+            update_layout,
+            bind_layout
         ])
         .run(tauri::generate_context!())
         .expect("error while running WindowsKeeper");

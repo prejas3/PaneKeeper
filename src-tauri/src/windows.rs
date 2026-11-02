@@ -214,6 +214,35 @@ pub fn target_normal_rect(saved: &WindowSnapshot, target: &Monitor) -> Rect {
     }
 }
 
+/// Saved monitor if connected, else the primary one (restore and the UI preview share this).
+pub fn pick_target_monitor<'a>(saved: &WindowSnapshot, monitors: &'a [Monitor]) -> Option<&'a Monitor> {
+    monitors
+        .iter()
+        .find(|monitor| monitor.id == saved.monitor.id)
+        .or_else(|| monitors.iter().find(|monitor| monitor.primary))
+        .or_else(|| monitors.first())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Landing {
+    pub monitor_id: String,
+    pub rect: Rect,
+}
+
+/// Where each saved window would land on the given monitors, in screen coordinates.
+pub fn preview(saved: &[WindowSnapshot], monitors: &[Monitor]) -> Vec<Option<Landing>> {
+    saved
+        .iter()
+        .map(|window| {
+            pick_target_monitor(window, monitors).map(|target| Landing {
+                monitor_id: target.id.clone(),
+                rect: target_normal_rect(window, target),
+            })
+        })
+        .collect()
+}
+
 pub fn placement_from_frame(frame: Rect, insets: Insets, from_dpi: u32, to_dpi: u32) -> Rect {
     let scale = to_dpi.max(1) as f64 / from_dpi.max(1) as f64;
     let s = |value: i32| (value as f64 * scale).round() as i32;
@@ -397,11 +426,13 @@ mod platform {
         } else {
             device.clone()
         };
-        let name = if ok != 0 {
-            wide(&display.DeviceString)
-        } else {
-            device
-        };
+        let name = friendly_name(&device).unwrap_or_else(|| {
+            if ok != 0 {
+                wide(&display.DeviceString)
+            } else {
+                device
+            }
+        });
         let mut dpi_x = 96;
         let mut dpi_y = 96;
         let _ = GetDpiForMonitor(handle, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
@@ -413,6 +444,54 @@ mod platform {
             dpi: dpi_x,
             primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
         }
+    }
+
+    /// EDID name ("DELL U2723QE") via DisplayConfig; EnumDisplayDevices only says "Generic PnP Monitor".
+    unsafe fn friendly_name(gdi_device: &str) -> Option<String> {
+        use windows_sys::Win32::Devices::Display::{
+            DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,
+            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+            DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+            DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
+        };
+        let (mut path_count, mut mode_count) = (0u32, 0u32);
+        if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut path_count, &mut mode_count) != 0 {
+            return None;
+        }
+        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); path_count as usize];
+        let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); mode_count as usize];
+        if QueryDisplayConfig(
+            QDC_ONLY_ACTIVE_PATHS,
+            &mut path_count,
+            paths.as_mut_ptr(),
+            &mut mode_count,
+            modes.as_mut_ptr(),
+            std::ptr::null_mut(),
+        ) != 0
+        {
+            return None;
+        }
+        paths.truncate(path_count as usize);
+        paths.into_iter().find_map(|path| {
+            let mut source = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
+            source.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            source.header.size = size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
+            source.header.adapterId = path.sourceInfo.adapterId;
+            source.header.id = path.sourceInfo.id;
+            if DisplayConfigGetDeviceInfo(&mut source.header) != 0
+                || wide(&source.viewGdiDeviceName) != gdi_device
+            {
+                return None;
+            }
+            let mut target = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
+            target.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+            target.header.size = size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32;
+            target.header.adapterId = path.targetInfo.adapterId;
+            target.header.id = path.targetInfo.id;
+            let name = (DisplayConfigGetDeviceInfo(&mut target.header) == 0)
+                .then(|| wide(&target.monitorFriendlyDeviceName))?;
+            (!name.trim().is_empty()).then_some(name)
+        })
     }
 
     unsafe fn monitor_for_window(hwnd: HWND) -> Monitor {
@@ -514,11 +593,8 @@ mod platform {
                     };
                     let hwnd = live.1[li].handle as HWND;
                     let current_monitor = monitor_for_window(hwnd);
-                    let target_monitor = monitors
-                        .iter()
-                        .find(|monitor| monitor.id == snapshot.monitor.id)
-                        .or_else(|| monitors.iter().find(|monitor| monitor.primary))
-                        .unwrap_or(&current_monitor);
+                    let target_monitor =
+                        pick_target_monitor(snapshot, &monitors).unwrap_or(&current_monitor);
                     let target_screen = target_normal_rect(snapshot, target_monitor);
                     let target = screen_to_workspace(target_screen, workspace_offset);
                     let mut placement: WINDOWPLACEMENT = zeroed();
@@ -708,6 +784,26 @@ mod tests {
             match_windows(&[saved("Docs - Browser", 0)], &[other]),
             vec![None]
         );
+    }
+
+    #[test]
+    fn preview_lands_on_the_saved_monitor_or_the_primary_one() {
+        let area = |left| Rect { left, top: 0, right: left + 1920, bottom: 1040 };
+        let mut secondary = monitor("B", area(1920), 96);
+        secondary.primary = false;
+        let mut on_a = saved("A window", 0);
+        on_a.monitor = monitor("A", area(0), 96);
+        on_a.normal_rect = Rect { left: 100, top: 100, right: 900, bottom: 700 };
+        let mut on_gone = on_a.clone();
+        on_gone.monitor = monitor("gone", area(-1920), 96);
+        on_gone.normal_rect = Rect { left: -1820, top: 100, right: -1020, bottom: 700 };
+        let landed = preview(&[on_a, on_gone], &[secondary, monitor("A", area(0), 96)]);
+        let landed: Vec<_> = landed.into_iter().map(Option::unwrap).collect();
+        assert_eq!(landed[0].monitor_id, "A");
+        assert_eq!(landed[0].rect, Rect { left: 100, top: 100, right: 900, bottom: 700 });
+        assert_eq!(landed[1].monitor_id, "A");
+        assert!(landed[1].rect.left >= 0 && landed[1].rect.right <= 1920);
+        assert!(preview(&[saved("x", 0)], &[]).pop().unwrap().is_none());
     }
 
     #[test]

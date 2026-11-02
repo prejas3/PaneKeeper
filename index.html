@@ -3,11 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f5f7fb" />
-    <title>WindowsKeeper</title>
+        <title>WindowsKeeper</title>
   </head>
   <body>
-    <main id="app"></main>
+    <div id="app" class="app"></div>
+    <div class="tip" role="tooltip" hidden></div>
+    <dialog class="confirm" aria-labelledby="confirm-title"></dialog>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

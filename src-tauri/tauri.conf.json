@@ -13,12 +13,12 @@
     "windows": [{
       "title": "WindowsKeeper",
       "width": 960,
-      "height": 680,
-      "minWidth": 400,
+      "height": 640,
+      "minWidth": 420,
       "minHeight": 520
     }],
     "security": {
-      "csp": "default-src 'self'; style-src 'self'; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
     }
   },
   "bundle": {
