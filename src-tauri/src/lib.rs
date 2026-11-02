@@ -2,6 +2,8 @@ pub mod autostart;
 pub mod events;
 pub mod icons;
 pub mod layouts;
+#[cfg(all(test, windows))]
+mod testwin;
 pub mod windows;
 
 use events::{EventService, ServiceEvent};
@@ -296,19 +298,7 @@ fn restore_by_id(app: &AppHandle, id: &str) -> Result<(), String> {
     let app = app.clone();
     thread::spawn(move || {
         let results = layouts::restore_layout(&layout);
-        let restored = results
-            .iter()
-            .filter(|result| matches!(result, windows::RestoreResult::Restored { .. }))
-            .count();
-        let not_running = results
-            .iter()
-            .filter(|result| matches!(result, windows::RestoreResult::NotRunning { .. }))
-            .count();
-        let blocked = results.len().saturating_sub(restored + not_running);
-        let _ = app.emit(
-            "restore-result",
-            format!("{restored} restored · {not_running} not running · {blocked} blocked"),
-        );
+        let _ = app.emit("restore-result", layouts::summary(&results));
     });
     Ok(())
 }

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --configLoader runner",
     "build": "tsc && vite build --configLoader runner",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "e2e": "cargo build --release --example testwin --manifest-path src-tauri/Cargo.toml && tauri build --no-bundle && node scripts/e2e-auto.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2"

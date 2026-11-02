@@ -236,23 +236,48 @@ pub fn restore_layout(layout: &Layout) -> Vec<RestoreResult> {
     windows::restore(&selected)
 }
 
+/// The toast after a restore: "8 restored · 1 not running · 1 blocked". Blocked = moving it failed,
+/// e.g. ERROR_ACCESS_DENIED for an elevated window (UIPI); its error is named when it is the only one.
+pub fn summary(results: &[RestoreResult]) -> String {
+    let count = |want: fn(&RestoreResult) -> bool| results.iter().filter(|r| want(r)).count();
+    let restored = count(|r| matches!(r, RestoreResult::Restored { .. }));
+    let not_running = count(|r| matches!(r, RestoreResult::NotRunning { .. }));
+    let failed: Vec<_> = results
+        .iter()
+        .filter_map(|r| match r {
+            RestoreResult::Failed { title, error } => Some((title, error)),
+            _ => None,
+        })
+        .collect();
+    let mut text = format!("{restored} restored · {not_running} not running · {} blocked", failed.len());
+    if let [(title, error)] = failed.as_slice() {
+        text.push_str(&format!(" ({title}: {error})"));
+    }
+    text
+}
+
 fn launch_and_wait(snapshot: &WindowSnapshot, launch: &LaunchConfig) -> Result<(), String> {
     let mut command = Command::new(&snapshot.exe);
     command.args(&launch.args);
     if let Some(dir) = &launch.working_dir {
         command.current_dir(dir);
     }
-    command.spawn().map_err(|error| error.to_string())?;
-    wait_for(Duration::from_secs(launch.wait_seconds), || {
+    // Wait for one more window of this app than before: another window of it may already be open.
+    let count = || {
         windows::capture()
-            .map(|current| {
-                current.iter().any(|window| {
-                    window.exe.eq_ignore_ascii_case(&snapshot.exe)
-                        && window.class.eq_ignore_ascii_case(&snapshot.class)
-                })
-            })
-            .unwrap_or(false)
-    })
+            .map(|current| count_app_windows(&current, snapshot))
+            .unwrap_or(0)
+    };
+    let before = count();
+    command.spawn().map_err(|error| error.to_string())?;
+    wait_for(Duration::from_secs(launch.wait_seconds), || count() > before)
+}
+
+fn count_app_windows(windows: &[WindowSnapshot], app: &WindowSnapshot) -> usize {
+    windows
+        .iter()
+        .filter(|window| window.exe.eq_ignore_ascii_case(&app.exe) && window.class.eq_ignore_ascii_case(&app.class))
+        .count()
 }
 
 fn wait_for(timeout: Duration, mut ready: impl FnMut() -> bool) -> Result<(), String> {
@@ -409,6 +434,28 @@ mod tests {
         assert!(merged.windows[0].included && merged.windows[0].launch.is_none());
         assert!(!merged.windows[1].included && merged.windows[1].launch.is_some());
         assert_eq!(merged.windows[1].window.normal_rect.left, 99);
+    }
+
+    #[test]
+    fn summary_reports_blocked_windows_with_their_error() {
+        let ok = RestoreResult::Restored { title: "Docs".into() };
+        let gone = RestoreResult::NotRunning { title: "Mail".into() };
+        let denied = RestoreResult::Failed { title: "Admin tool".into(), error: "Access is denied. (os error 5)".into() };
+        assert_eq!(
+            summary(&[ok.clone(), ok.clone(), gone.clone(), denied.clone()]),
+            "2 restored · 1 not running · 1 blocked (Admin tool: Access is denied. (os error 5))"
+        );
+        assert_eq!(summary(&[denied.clone(), denied]), "0 restored · 0 not running · 2 blocked");
+        assert_eq!(summary(&[]), "0 restored · 0 not running · 0 blocked");
+    }
+
+    #[test]
+    fn launch_waits_for_a_new_window_of_the_app() {
+        let app = window("A");
+        let mut other = window("A");
+        other.class = "Other".into();
+        assert_eq!(count_app_windows(&[app.clone(), other.clone(), app.clone()], &app), 2);
+        assert_eq!(count_app_windows(&[other], &app), 0);
     }
 
     #[test]

@@ -293,53 +293,18 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    #[ignore = "opens, moves, and restores two test-owned Notepad windows while another app has focus"]
-    fn live_hotkey_restores_notepads_while_another_app_has_focus() {
+    #[ignore = "registers Ctrl+Alt+9, presses it and restores two test-owned windows (examples/testwin.rs)"]
+    fn live_hotkey_restores_test_windows_while_another_app_has_focus() {
         use crate::{
             layouts::{self, LayoutWindow},
+            testwin::TestWindows,
             windows::{self, Rect},
         };
-        use std::{
-            fs,
-            process::Command,
-            sync::mpsc,
-            thread,
-            time::{Duration, Instant, SystemTime},
-        };
+        use std::{sync::mpsc, time::Duration};
 
-        let token = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        let root = std::env::temp_dir().join(format!("windowskeeper-hotkey-{token}"));
-        fs::create_dir_all(&root).unwrap();
-        let mut children: Vec<_> = ["a", "b"]
-            .iter()
-            .map(|part| {
-                let path = root.join(format!("wk-{part}-{token}.txt"));
-                fs::write(&path, "WindowsKeeper hotkey test").unwrap();
-                Command::new("notepad.exe")
-                    .arg("/newWindow")
-                    .arg(path)
-                    .spawn()
-                    .unwrap()
-            })
-            .collect();
-        let pids: Vec<u32> = children.iter().map(|child| child.id()).collect();
-        let wait = |ready: &dyn Fn() -> bool| {
-            let deadline = Instant::now() + Duration::from_secs(15);
-            while Instant::now() < deadline {
-                if ready() {
-                    return true;
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            false
-        };
-        assert!(wait(&|| unsafe {
-            windows::test_capture_processes(&pids).len() == 2
-        }));
-        let saved = unsafe { windows::test_capture_processes(&pids) };
+        let rect = |left| Rect { left, top: 200, right: left + 480, bottom: 560 };
+        let test = TestWindows::open("hotkey", &[rect(140), rect(680)]);
+        let saved = test.capture();
         let layout = Layout {
             id: "live".into(),
             name: "Live".into(),
@@ -349,25 +314,12 @@ mod tests {
             windows: saved
                 .iter()
                 .cloned()
-                .map(|window| LayoutWindow {
-                    window,
-                    included: true,
-                    launch: None,
-                })
+                .map(|window| LayoutWindow { window, included: true, launch: None })
                 .collect(),
         };
-        for (index, pid) in pids.iter().enumerate() {
-            assert!(unsafe {
-                windows::test_move_window_for_process(
-                    *pid,
-                    Rect {
-                        left: 60 + index as i32 * 340,
-                        top: 70,
-                        right: 360 + index as i32 * 340,
-                        bottom: 330,
-                    },
-                )
-            });
+        for (index, pid) in test.pids.iter().enumerate() {
+            let moved = Rect { left: 60 + index as i32 * 340, top: 70, right: 360 + index as i32 * 340, bottom: 330 };
+            assert!(unsafe { windows::test_move_window_for_process(*pid, moved) });
         }
         let foreground = unsafe { windows::test_foreground_process_id() };
         assert_ne!(foreground, 0);
@@ -385,27 +337,10 @@ mod tests {
             ServiceEvent::ShortcutsRegistered | ServiceEvent::DisplayChanged => {}
         })
         .unwrap();
-        assert!(rx.try_recv().is_err());
+        assert!(rx.try_recv().is_err(), "Ctrl+Alt+9 is taken by another app");
         send_ctrl_alt_9().unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), Ok(()));
-        assert!(wait(&|| {
-            let current = unsafe { windows::test_capture_processes(&pids) };
-            saved.iter().all(|expected| {
-                current.iter().any(|actual| {
-                    let a = actual.frame_rect;
-                    let e = expected.frame_rect;
-                    (a.left - e.left).abs() <= 2
-                        && (a.top - e.top).abs() <= 2
-                        && (a.right - e.right).abs() <= 2
-                        && (a.bottom - e.bottom).abs() <= 2
-                })
-            })
-        }));
-        for child in &mut children {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        let _ = fs::remove_dir_all(root);
+        assert!(test.back_in_place(&saved));
     }
 
     #[cfg(windows)]

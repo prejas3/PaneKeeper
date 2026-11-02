@@ -972,83 +972,17 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    #[ignore = "opens and moves two test-owned Notepad windows"]
-    fn live_notepad_round_trip_within_two_pixels() {
-        use std::{
-            fs,
-            process::Command,
-            thread,
-            time::{Duration, Instant, SystemTime},
-        };
-
-        let token = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        let root = std::env::temp_dir().join(format!("windowskeeper-live-{token}"));
-        fs::create_dir_all(&root).unwrap();
-        let names = [format!("wk-a-{token}.txt"), format!("wk-b-{token}.txt")];
-        let paths = names.clone().map(|name| root.join(name));
-        for path in &paths {
-            fs::write(path, "WindowsKeeper live test").unwrap();
-        }
-        let mut children: Vec<_> = paths
-            .iter()
-            .map(|path| {
-                Command::new("notepad.exe")
-                    .arg("/newWindow")
-                    .arg(path)
-                    .spawn()
-                    .unwrap()
-            })
-            .collect();
-        let process_ids: Vec<u32> = children.iter().map(|child| child.id()).collect();
-
-        let wait_for = |predicate: &dyn Fn() -> bool| {
-            let deadline = Instant::now() + Duration::from_secs(15);
-            while Instant::now() < deadline {
-                if predicate() {
-                    return true;
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            false
-        };
-        assert!(wait_for(&|| unsafe {
-            platform::capture_processes(&process_ids).len() == 2
-        }));
-        let saved = unsafe { platform::capture_processes(&process_ids) };
+    #[ignore = "opens, moves and restores two test-owned windows (examples/testwin.rs)"]
+    fn live_round_trip_within_two_pixels() {
+        let rect = |left| Rect { left, top: 160, right: left + 520, bottom: 560 };
+        let test = crate::testwin::TestWindows::open("engine", &[rect(120), rect(700)]);
+        let saved = test.capture();
         assert_eq!(saved.len(), 2);
-        for (index, process_id) in process_ids.iter().enumerate() {
-            let moved = Rect {
-                left: 80 + index as i32 * 360,
-                top: 80,
-                right: 400 + index as i32 * 360,
-                bottom: 360,
-            };
-            assert!(unsafe { platform::move_window_for_process(*process_id, moved) });
+        for (index, pid) in test.pids.iter().enumerate() {
+            let moved = Rect { left: 80 + index as i32 * 360, top: 80, right: 400 + index as i32 * 360, bottom: 360 };
+            assert!(unsafe { platform::move_window_for_process(*pid, moved) });
         }
-        assert!(restore(&saved)
-            .iter()
-            .all(|result| matches!(result, RestoreResult::Restored { .. })));
-        assert!(wait_for(&|| {
-            let current = unsafe { platform::capture_processes(&process_ids) };
-            saved.iter().all(|expected| {
-                current.iter().any(|actual| {
-                    let a = actual.frame_rect;
-                    let e = expected.frame_rect;
-                    (a.left - e.left).abs() <= 2
-                        && (a.top - e.top).abs() <= 2
-                        && (a.right - e.right).abs() <= 2
-                        && (a.bottom - e.bottom).abs() <= 2
-                })
-            })
-        }));
-
-        for child in &mut children {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        let _ = fs::remove_dir_all(root);
+        assert!(restore(&saved).iter().all(|result| matches!(result, RestoreResult::Restored { .. })));
+        assert!(test.back_in_place(&saved));
     }
 }
