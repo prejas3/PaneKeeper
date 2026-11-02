@@ -440,6 +440,13 @@ mod platform {
         monitors
     }
 
+    pub fn monitors() -> Vec<Monitor> {
+        unsafe {
+            enable_dpi_awareness();
+            connected_monitors()
+        }
+    }
+
     pub fn capture() -> Result<Vec<WindowSnapshot>, String> {
         unsafe {
             enable_dpi_awareness();
@@ -574,6 +581,14 @@ mod platform {
     }
 
     #[cfg(test)]
+    pub unsafe fn foreground_process_id() -> u32 {
+        let window = windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
+        let mut process_id = 0;
+        GetWindowThreadProcessId(window, &mut process_id);
+        process_id
+    }
+
+    #[cfg(test)]
     pub unsafe fn capture_processes(process_ids: &[u32]) -> Vec<WindowSnapshot> {
         enable_dpi_awareness();
         let monitors = connected_monitors();
@@ -595,7 +610,14 @@ mod platform {
 }
 
 #[cfg(windows)]
-pub use platform::{capture, enable_dpi_awareness, restore};
+pub use platform::{capture, enable_dpi_awareness, monitors, restore};
+
+#[cfg(all(test, windows))]
+pub(crate) use platform::{
+    capture_processes as test_capture_processes,
+    foreground_process_id as test_foreground_process_id,
+    move_window_for_process as test_move_window_for_process,
+};
 
 #[cfg(not(windows))]
 pub fn capture() -> Result<Vec<WindowSnapshot>, String> {
@@ -604,6 +626,11 @@ pub fn capture() -> Result<Vec<WindowSnapshot>, String> {
 
 #[cfg(not(windows))]
 pub fn enable_dpi_awareness() {}
+
+#[cfg(not(windows))]
+pub fn monitors() -> Vec<Monitor> {
+    Vec::new()
+}
 
 #[cfg(not(windows))]
 pub fn restore(saved: &[WindowSnapshot]) -> Vec<RestoreResult> {

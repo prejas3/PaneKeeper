@@ -28,6 +28,6 @@
       "../THIRD_PARTY.md": "THIRD_PARTY.md",
       "../LICENSE": "LICENSE.txt"
     },
-    "windows": { "nsis": { "installMode": "currentUser" } }
+    "windows": { "nsis": { "installMode": "currentUser", "installerHooks": "windows/hooks.nsh" } }
   }
 }
