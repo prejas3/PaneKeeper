@@ -3,6 +3,7 @@
 // SEC:only test-owned windows are ever moved: testwin.exe (src-tauri/examples/testwin.rs) acts on its own window class only,
 //     and every other window the app captures is removed from the layout before anything is restored.
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
@@ -14,7 +15,6 @@ const TW = process.argv[3] ?? here("../src-tauri/target/release/examples/testwin
 const STAMP = Date.now();
 const ROOT = path.join(os.tmpdir(), `WindowsKeeper-Test-${STAMP}`);
 const P = (...p) => path.join(ROOT, ...p);
-const PORT = 9335;
 const PREFIX = `wk-e2e-${STAMP}`;
 const LAUNCHED = "WindowsKeeper test window"; // testwin's title when started without arguments
 const SHORTCUT = "Ctrl+Alt+Shift+F9"; // unusual on purpose: no clash with the default Ctrl+Alt+1…9
@@ -58,32 +58,69 @@ const tests = [A, B, C];
 
 // ---------- app + DevTools ----------
 let proc;
+let PORT = 0;
+let launches = 0;
+/** A port nothing listens on right now (a fixed one can be taken by another run or app). */
+const freePort = () =>
+  new Promise((resolve, reject) => {
+    const server = net.createServer().once("error", reject);
+    server.listen(0, "127.0.0.1", () => { const { port } = server.address(); server.close(() => resolve(port)); });
+  });
+const targets = async () => {
+  try {
+    return await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+  } catch {
+    return null;
+  }
+};
+/** Open the DevTools socket of the app page; the first one can close while WebView2 is still starting. */
+async function connect() {
+  let last = "no DevTools target";
+  for (let attempt = 1; attempt <= 8; attempt++) {
+    const target = await until(async () => {
+      if (proc.exitCode !== null) throw new Error(`app exited with code ${proc.exitCode} before DevTools was ready (log: ${appLog})`);
+      return (await targets())?.find((t) => t.type === "page" && /^(https?|tauri):\/\/tauri\.localhost/.test(t.url));
+    }, 60000);
+    if (!target) break;
+    const ws = new WebSocket(target.webSocketDebuggerUrl);
+    const opened = await new Promise((resolve) => {
+      ws.onopen = () => resolve(true);
+      ws.onerror = (e) => { last = `WebSocket error on attempt ${attempt}: ${e.message ?? e.type}`; resolve(false); };
+    });
+    if (opened) return ws;
+    await sleep(500);
+  }
+  throw new Error(`${last} (port ${PORT}, log: ${appLog})`);
+}
+let appLog = "";
 async function launch() {
+  PORT = await freePort();
+  appLog = P(`app-${++launches}.log`);
+  const log = fs.openSync(appLog, "w");
   proc = spawn(EXE, [], {
     env: { ...process.env, APPDATA: P("AppData"), WEBVIEW2_USER_DATA_FOLDER: P("WebView2"), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${PORT}` },
-    stdio: "ignore",
+    stdio: ["ignore", log, log],
   });
-  const target = await until(async () => {
-    try {
-      return (await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()).find((t) => t.type === "page");
-    } catch {
-      return null;
-    }
-  }, 20000);
-  if (!target) throw new Error("no DevTools target");
-  const ws = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+  const ws = await connect();
   let id = 0;
   const waiting = new Map();
-  ws.onmessage = (m) => { const msg = JSON.parse(m.data); waiting.get(msg.id)?.(msg); waiting.delete(msg.id); };
-  const send = (method, params = {}) => new Promise((r) => { const i = ++id; waiting.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+  ws.onmessage = (m) => { const msg = JSON.parse(m.data); waiting.get(msg.id)?.resolve(msg); waiting.delete(msg.id); };
+  // A closed socket fails every pending call instead of leaving the run hanging.
+  ws.onclose = () => { for (const w of waiting.values()) w.reject(new Error(`DevTools socket closed (app exit code ${proc.exitCode})`)); waiting.clear(); };
+  const send = (method, params = {}) =>
+    new Promise((resolve, reject) => {
+      if (ws.readyState !== WebSocket.OPEN) return reject(new Error("DevTools socket is not open"));
+      const i = ++id;
+      waiting.set(i, { resolve, reject });
+      ws.send(JSON.stringify({ id: i, method, params }));
+    });
   const js = async (expr) => {
     const res = await send("Runtime.evaluate", { expression: `(async () => { ${expr} })()`, awaitPromise: true, returnByValue: true });
     if (res.result?.exceptionDetails) throw new Error(JSON.stringify(res.result.exceptionDetails));
     return res.result?.result?.value;
   };
   const shot = async (name) => { const r = await send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(P(name), Buffer.from(r.result.data, "base64")); };
-  await until(() => js(`return !!document.querySelector(".save")`));
+  if (!(await until(() => js(`return !!document.querySelector(".save")`), 30000))) throw new Error(`app UI did not render (log: ${appLog})`);
   // Toasts are short-lived: keep every one for the checks.
   await js(`window.__toasts = []; new MutationObserver((m) => m.forEach((r) => r.addedNodes.forEach((n) => n.classList?.contains("toast") && __toasts.push(n.textContent)))).observe(document.body, { childList: true });`);
   return { js, shot, ws };
@@ -91,7 +128,7 @@ async function launch() {
 async function stop() {
   if (proc.exitCode !== null) return;
   proc.kill();
-  await until(async () => { try { await fetch(`http://127.0.0.1:${PORT}/json/list`); return false; } catch { return true; } }, 10000);
+  await until(async () => proc.exitCode !== null && !(await targets()), 10000);
 }
 const click = (sel) => `const el = document.querySelector(${JSON.stringify(sel)}); if (!el) throw new Error("missing " + ${JSON.stringify(sel)}); el.click();`;
 const store = () => JSON.parse(fs.readFileSync(P("AppData/WindowsKeeper/layouts.json"), "utf8"));
