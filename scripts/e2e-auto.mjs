@@ -121,16 +121,27 @@ async function launch() {
     if (res.result?.exceptionDetails) throw new Error(JSON.stringify(res.result.exceptionDetails));
     return res.result?.result?.value;
   };
+  const narrow = (width) => width ? send("Emulation.setDeviceMetricsOverride", { width, height: 640, deviceScaleFactor: 0, mobile: false }) : send("Emulation.clearDeviceMetricsOverride");
   const shot = async (name) => { const r = await send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(P(name), Buffer.from(r.result.data, "base64")); };
   if (!(await until(() => js(`return !!document.querySelector(".save")`), 30000))) throw new Error(`app UI did not render (log: ${appLog})`);
-  // Toasts are short-lived: keep every one for the checks.
-  await js(`window.__toasts = []; new MutationObserver((m) => m.forEach((r) => r.addedNodes.forEach((n) => n.classList?.contains("toast") && __toasts.push(n.textContent)))).observe(document.body, { childList: true });`);
-  return { js, shot, ws };
+  // Restore results arrive as an InfoBar (#restore) carrying its counts; keep every one for the checks (WI-196).
+  await js(`window.__toasts = []; new MutationObserver((m) => m.forEach((r) => r.addedNodes.forEach((n) => n.id === "restore" && __toasts.push([n.dataset.restored, n.dataset.notRunning, n.dataset.blocked].join("/"))))).observe(document.body, { childList: true, subtree: true });`);
+  return { js, shot, ws, narrow };
 }
 async function stop() {
   if (proc.exitCode !== null) return;
   proc.kill();
   await until(async () => proc.exitCode !== null && !(await targets()), 10000);
+}
+/** Screenshots in light and dark on the solid background, then the page as it was. */
+async function themed(js, shot, name) {
+  const was = await js(`const h = document.documentElement; const was = [h.className, h.dataset.theme ?? ""]; h.classList.remove("mica"); return was;`);
+  for (const theme of ["light", "dark"]) {
+    await js(`document.documentElement.dataset.theme = "${theme}"`);
+    await sleep(100);
+    await shot(`${name}-${theme}.png`);
+  }
+  await js(`const h = document.documentElement; h.className = ${JSON.stringify(was[0])}; if (${JSON.stringify(was[1])}) h.dataset.theme = ${JSON.stringify(was[1])}; else delete h.dataset.theme;`);
 }
 const click = (sel) => `const el = document.querySelector(${JSON.stringify(sel)}); if (!el) throw new Error("missing " + ${JSON.stringify(sel)}); el.click();`;
 const store = () => JSON.parse(fs.readFileSync(P("AppData/PaneKeeper/layouts.json"), "utf8"));
@@ -159,7 +170,7 @@ try {
   for (const t of tests) open(t.title, t.rect, t.state === "maximized" ? "max" : "normal");
   check("3 test windows open", await until(() => tests.every((t) => query(t.title).found)), `${monitors.length} monitor(s)`);
 
-  let { js, shot } = await launch();
+  let { js, shot, narrow } = await launch();
 
   // 1. save a layout, keep only the test windows, set the shortcut
   await js(click('[data-act="capture"]'));
@@ -185,14 +196,21 @@ try {
     document.querySelector(".shortcut").dispatchEvent(new KeyboardEvent("keydown", { key: "F9", code: "F9", ctrlKey: true, altKey: true, shiftKey: true, bubbles: true }));`);
   check("1. shortcut set through the capture field", await until(() => layout().shortcut === SHORTCUT), layout().shortcut);
   check("1. shortcut registered without a conflict", await until(() => js(`return !!document.querySelector(".shortcut") && !document.querySelector(".shortcut.taken")`)));
-  await shot("01-layout.png");
+  // SJ Utility UI §11: both themes on the solid (no Mica) fallback, since a capture shows Mica as blank;
+  // and a 420 px window without horizontal scrolling (WI-196)
+  await themed(js, shot, "01-layout");
+  await narrow(420);
+  await sleep(300);
+  check("1. 420 px wide: no horizontal scroll", await js(`return document.documentElement.scrollWidth <= innerWidth && document.querySelector(".content").scrollWidth <= document.querySelector(".content").clientWidth`));
+  await shot("01-layout-420.png");
+  await narrow(0);
 
   // 2. scramble, then Restore now
   scramble();
   await clearToasts(js);
   await js(click('[data-act="restore"]'));
   check("2. Restore now: rects within 2 px, states right", await inPlace(saved));
-  check("2. toast counts", await toastLike(js, "3 restored · 0 not running · 0 blocked"));
+  check("2. InfoBar counts", await toastLike(js, "3/0/0"));
 
   // 3. global shortcut while a test window has focus
   scramble();
@@ -216,7 +234,7 @@ try {
     await until(() => { const q = query(LAUNCHED); return q.found && q.state === sC.showState && near(q.normal, rectOf(sC.normalRect)); }, 20000),
     JSON.stringify(query(LAUNCHED)),
   );
-  check("4. toast counts", await toastLike(js, "3 restored · 0 not running · 0 blocked"), await js(`return __toasts.join(" | ")`));
+  check("4. InfoBar counts", await toastLike(js, "3/0/0"), await js(`return __toasts.join(" | ")`));
 
   // 5 + 6. fake a missing monitor for A, restart, restore with the shortcut
   await stop();
@@ -240,6 +258,27 @@ try {
     JSON.stringify(query(A.title)),
   );
   check("6. shortcut still works after restart", await until(() => query(B.title).state === "maximized"));
+
+  // 7. language: the Settings switch changes the whole window, is saved and survives a restart (WI-196)
+  const navText = () => js(`return document.querySelector('[data-act="go"][data-v="settings"]')?.textContent.trim()`);
+  const before = await js(`return document.documentElement.lang`);
+  const other = before === "pl" ? "en" : "pl";
+  const settingsBefore = await navText();
+  await js(click('[data-act="go"][data-v="settings"]'));
+  await until(() => js(`return !!document.querySelector(".card .select")`), 5000);
+  await js(`document.querySelector(".card .select").click()`); // first select on Settings = language
+  await until(() => js(`return document.querySelectorAll('[role="option"]').length > 1`), 5000);
+  await js(`[...document.querySelectorAll('[role="option"]')].find(o => o.textContent === ${JSON.stringify(other === "pl" ? "Polski" : "English")}).click()`);
+  const switched = await until(async () => (await js(`return document.documentElement.lang`)) === other && (await navText()) !== settingsBefore, 5000);
+  check("7. language switch changes the window", !!switched, `${before} -> ${other}: ${settingsBefore} -> ${await navText()}`);
+  check("7. language saved in layouts.json", await until(() => store().settings.lang === other, 5000));
+  await themed(js, shot, "03-settings-other-language");
+  await stop();
+  ({ js, shot } = await launch());
+  await js(click('[data-act="go"][data-v="about"]'));
+  await sleep(300);
+  await themed(js, shot, "04-about");
+  check("7. language survives restart", await until(async () => (await js(`return document.documentElement.lang`)) === other && (await navText()) !== settingsBefore, 10000));
 } catch (error) {
   check("run without errors", false, String(error?.stack ?? error));
 } finally {
@@ -257,8 +296,8 @@ if (!localExisted) try { fs.rmdirSync(localDir); } catch {}
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
-console.log("Not scripted: an elevated (admin) window blocked by UIPI. Covered by layouts::tests::summary_reports_blocked_windows_with_their_error.");
-if (failed.length) console.log(`Kept for inspection: ${ROOT}`);
+console.log("Not scripted: an elevated (admin) window blocked by UIPI. Covered by layouts::tests::summary_counts_and_names_blocked_windows.");
+if (failed.length || process.env.E2E_KEEP) console.log(`Kept for inspection: ${ROOT}`);
 // WebView2's helper processes let go of their files a moment after the app exits.
-else fs.rmSync(ROOT, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+else if (!process.env.E2E_KEEP) fs.rmSync(ROOT, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 process.exit(failed.length ? 1 : 0);

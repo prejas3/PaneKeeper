@@ -1,5 +1,6 @@
 pub mod autostart;
 pub mod events;
+pub mod i18n;
 pub mod icons;
 pub mod layouts;
 #[cfg(all(test, windows))]
@@ -7,6 +8,7 @@ mod testwin;
 pub mod windows;
 
 use events::{EventService, ServiceEvent};
+use i18n::tr;
 use layouts::{Layout, LayoutStore, Settings};
 use std::{
     path::PathBuf,
@@ -45,24 +47,24 @@ fn refresh_events(state: &AppState) {
 fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     let state = app.state::<AppState>();
     let store = state.store.lock().map_err(|e| e.to_string())?.clone();
-    let mut restore = SubmenuBuilder::new(app, "Restore layout");
+    let mut restore = SubmenuBuilder::new(app, tr("Restore layout", "Przywróć układ"));
     if store.layouts.is_empty() {
         restore = restore
-            .text("no-layouts", "No saved layouts")
+            .text("no-layouts", tr("No saved layouts", "Brak zapisanych układów"))
             .enabled(false);
     }
     for layout in &store.layouts {
         restore = restore.text(format!("layout:{}", layout.id), &layout.name);
     }
     let restore = restore.build().map_err(|e| e.to_string())?;
-    let save = MenuItem::with_id(app, "save", "Save current layout…", true, None::<&str>)
+    let save = MenuItem::with_id(app, "save", tr("Save current layout…", "Zapisz bieżący układ…"), true, None::<&str>)
         .map_err(|e| e.to_string())?;
-    let open = MenuItem::with_id(app, "open", "Open PaneKeeper", true, None::<&str>)
+    let open = MenuItem::with_id(app, "open", tr("Open PaneKeeper", "Otwórz PaneKeeper"), true, None::<&str>)
         .map_err(|e| e.to_string())?;
     let pause = CheckMenuItem::with_id(
         app,
         "pause",
-        "Pause",
+        tr("Pause shortcuts", "Wstrzymaj skróty"),
         true,
         store.settings.paused,
         None::<&str>,
@@ -71,14 +73,14 @@ fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     let start = CheckMenuItem::with_id(
         app,
         "autostart",
-        "Start with Windows",
+        tr("Start with Windows", "Uruchamiaj z Windows"),
         true,
         store.settings.autostart,
         None::<&str>,
     )
     .map_err(|e| e.to_string())?;
     let quit =
-        MenuItem::with_id(app, "quit", "Quit", true, None::<&str>).map_err(|e| e.to_string())?;
+        MenuItem::with_id(app, "quit", tr("Quit", "Zamknij"), true, None::<&str>).map_err(|e| e.to_string())?;
     Menu::with_items(app, &[&restore, &save, &open, &pause, &start, &quit])
         .map_err(|e| e.to_string())
 }
@@ -155,9 +157,9 @@ fn duplicate_layout(
         .iter()
         .find(|layout| layout.id == id)
         .cloned()
-        .ok_or("layout not found")?;
+        .ok_or_else(not_found)?;
     copy.id = layouts::new_id();
-    copy.name = format!("{} copy", copy.name);
+    copy.name = tr!("{} copy", "{} — kopia", copy.name);
     copy.shortcut = None;
     store.layouts.push(copy.clone());
     drop(store);
@@ -182,16 +184,24 @@ fn delete_layout(id: String, state: State<'_, AppState>, app: AppHandle) -> Resu
 
 #[tauri::command]
 fn save_settings(
-    settings: Settings,
+    mut settings: Settings,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    let changed = {
+    settings.lang = settings.lang.filter(|lang| lang == "pl" || lang == "en");
+    let (changed, theme_changed) = {
         let mut store = state.store.lock().map_err(|e| e.to_string())?;
         let changed = store.settings.autostart != settings.autostart;
+        let theme_changed = store.settings.theme != settings.theme;
         store.settings = settings.clone();
-        changed
+        (changed, theme_changed)
     };
+    i18n::set(settings.lang.as_deref().unwrap_or_else(|| i18n::system_lang()));
+    if theme_changed {
+        if let Some(window) = app.get_webview_window("main") {
+            apply_theme(&window, &settings.theme);
+        }
+    }
     if changed {
         autostart::set(
             settings.autostart,
@@ -201,6 +211,40 @@ fn save_settings(
     persist(&state)?;
     refresh_tray(&app);
     Ok(())
+}
+
+/// The UI language in use: the saved choice, else the Windows UI language.
+#[tauri::command]
+fn ui_lang() -> &'static str {
+    i18n::lang()
+}
+
+/// Opens the data folder in Explorer, or an https link in the default browser.
+#[tauri::command]
+fn open_external(target: String, state: State<'_, AppState>) -> Result<(), String> {
+    let target = match target.as_str() {
+        "data" => state.path.parent().unwrap_or(&state.path).display().to_string(),
+        url if url.starts_with("https://") && !url.contains('"') => url.to_string(),
+        _ => return Err(tr("That link can't be opened.", "Tego linku nie można otworzyć.").into()),
+    };
+    std::process::Command::new("explorer.exe")
+        .arg(target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Native frame + Mica follow the app theme. Plain Mica follows Windows' theme, not the window's (FolderPilot FO-168),
+/// so a chosen theme picks MicaLight/MicaDark explicitly.
+fn apply_theme(window: &tauri::WebviewWindow, theme: &str) {
+    use tauri::window::{Effect, EffectsBuilder};
+    let (native, mica) = match theme {
+        "light" => (Some(tauri::Theme::Light), Effect::MicaLight),
+        "dark" => (Some(tauri::Theme::Dark), Effect::MicaDark),
+        _ => (None, Effect::Mica),
+    };
+    let _ = window.set_theme(native);
+    let _ = window.set_effects(EffectsBuilder::new().effect(mica).build());
 }
 
 #[tauri::command]
@@ -243,6 +287,14 @@ fn bind_layout(
     Ok(layout)
 }
 
+fn not_found() -> String {
+    tr(
+        "That layout no longer exists. Pick another one in the list.",
+        "Ten układ już nie istnieje. Wybierz inny z listy.",
+    )
+    .into()
+}
+
 fn find_layout(state: &AppState, id: &str) -> Result<Layout, String> {
     state
         .store
@@ -252,7 +304,7 @@ fn find_layout(state: &AppState, id: &str) -> Result<Layout, String> {
         .iter()
         .find(|layout| layout.id == id)
         .cloned()
-        .ok_or_else(|| "layout not found".into())
+        .ok_or_else(not_found)
 }
 
 fn replace_layout(state: &AppState, layout: Layout) -> Result<(), String> {
@@ -262,7 +314,7 @@ fn replace_layout(state: &AppState, layout: Layout) -> Result<(), String> {
             .layouts
             .iter_mut()
             .find(|item| item.id == layout.id)
-            .ok_or("layout not found")?;
+            .ok_or_else(not_found)?;
         *slot = layout;
     }
     persist(state)
@@ -283,7 +335,7 @@ fn restore_by_id(app: &AppHandle, id: &str) -> Result<(), String> {
         .iter()
         .find(|layout| layout.id == id)
         .cloned()
-        .ok_or("layout not found")?;
+        .ok_or_else(not_found)?;
     let wait = app
         .state::<AppState>()
         .store
@@ -363,7 +415,12 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let path = layouts::app_root()?.join("layouts.json");
-            let store = Arc::new(Mutex::new(layouts::load(&path)));
+            let store = layouts::load(&path);
+            i18n::set(store.settings.lang.as_deref().unwrap_or_else(|| i18n::system_lang()));
+            if let Some(window) = app.get_webview_window("main") {
+                apply_theme(&window, &store.settings.theme);
+            }
+            let store = Arc::new(Mutex::new(store));
             app.manage(AppState {
                 store: store.clone(),
                 path,
@@ -386,7 +443,7 @@ pub fn run() {
                 .icon(
                     app.default_window_icon()
                         .cloned()
-                        .ok_or("missing app icon")?,
+                        .ok_or("missing app icon")?, // i18n-ok: build defect, before any window
                 )
                 .tooltip("PaneKeeper")
                 .menu(&menu)
@@ -462,9 +519,11 @@ pub fn run() {
             monitors,
             preview_layout,
             app_icon,
+            ui_lang,
+            open_external,
             update_layout,
             bind_layout
         ])
         .run(tauri::generate_context!())
-        .expect("error while running PaneKeeper");
+        .expect("error while running PaneKeeper"); // i18n-ok: crash text
 }

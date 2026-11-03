@@ -27,10 +27,13 @@ export type Layout = {
   bound: boolean;
   windows: LayoutWindow[];
 };
-export type Settings = { autoRestore: boolean; paused: boolean; autostart: boolean; launchWaitSeconds: number; theme: string };
+export type Theme = "system" | "light" | "dark";
+export type Settings = { autoRestore: boolean; paused: boolean; autostart: boolean; launchWaitSeconds: number; theme: Theme; lang: "pl" | "en" | null };
 export type Store = { layouts: Layout[]; settings: Settings };
 export type Landing = { monitorId: string; rect: Rect };
 export type Icon = { size: number; rgba: number[] };
+/** Payload of "restore-result" (layouts.rs RestoreSummary); the UI words it. */
+export type RestoreSummary = { restored: number; notRunning: number; blocked: { title: string; error: string }[] };
 
 export const api = {
   store: () => invoke<Store>("list_layouts"),
@@ -46,5 +49,8 @@ export const api = {
   monitors: () => invoke<Monitor[]>("monitors"),
   preview: (layout: Layout) => invoke<(Landing | null)[]>("preview_layout", { layout }),
   icon: (exe: string) => invoke<Icon | null>("app_icon", { exe }),
+  uiLang: () => invoke<"pl" | "en">("ui_lang"),
+  /** "data" opens the data folder; an https URL opens in the browser. */
+  openExternal: (target: string) => invoke<void>("open_external", { target }),
   on: (event: string, fn: (payload: unknown) => void) => listen(event, (e) => fn(e.payload)),
 };

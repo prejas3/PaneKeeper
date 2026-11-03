@@ -7,7 +7,9 @@
     "dev": "vite --configLoader runner",
     "build": "tsc && vite build --configLoader runner",
     "tauri": "tauri",
-    "e2e": "cargo build --release --example testwin --manifest-path src-tauri/Cargo.toml && tauri build --no-bundle && node scripts/e2e-auto.mjs"
+    "e2e": "cargo build --release --example testwin --manifest-path src-tauri/Cargo.toml && tauri build --no-bundle && node scripts/e2e-auto.mjs",
+    "check:i18n": "node scripts/i18n-check.mjs",
+    "notices": "node scripts/third-party-notices.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2"

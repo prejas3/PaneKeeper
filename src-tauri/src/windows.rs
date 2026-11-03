@@ -697,7 +697,7 @@ pub(crate) use platform::{
 
 #[cfg(not(windows))]
 pub fn capture() -> Result<Vec<WindowSnapshot>, String> {
-    Err("PaneKeeper only supports Windows".into())
+    Err("PaneKeeper only supports Windows".into()) // i18n-ok: non-Windows build only
 }
 
 #[cfg(not(windows))]
@@ -714,7 +714,7 @@ pub fn restore(saved: &[WindowSnapshot]) -> Vec<RestoreResult> {
         .iter()
         .map(|s| RestoreResult::Failed {
             title: s.title.clone(),
-            error: "PaneKeeper only supports Windows".into(),
+            error: "PaneKeeper only supports Windows".into(), // i18n-ok: non-Windows build only
         })
         .collect()
 }

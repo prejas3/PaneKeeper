@@ -57,6 +57,8 @@ pub struct Settings {
     pub launch_wait_seconds: u64,
     /// "system", "light" or "dark".
     pub theme: String,
+    /// "pl" | "en" once chosen in Settings; None follows the Windows UI language.
+    pub lang: Option<String>,
 }
 
 impl Default for Settings {
@@ -67,6 +69,7 @@ impl Default for Settings {
             autostart: false,
             launch_wait_seconds: 8,
             theme: "system".into(),
+            lang: None,
         }
     }
 }
@@ -98,7 +101,7 @@ pub fn monitor_fingerprint(monitors: &[windows::Monitor]) -> String {
 pub fn app_root() -> Result<PathBuf, String> {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
-        .ok_or_else(|| "APPDATA is unavailable".into())
+        .ok_or_else(|| "APPDATA is unavailable".into()) // i18n-ok: startup failure, before any window
         .map(|root| root.join("PaneKeeper"))
 }
 
@@ -236,24 +239,36 @@ pub fn restore_layout(layout: &Layout) -> Vec<RestoreResult> {
     windows::restore(&selected)
 }
 
-/// The toast after a restore: "8 restored · 1 not running · 1 blocked". Blocked = moving it failed,
-/// e.g. ERROR_ACCESS_DENIED for an elevated window (UIPI); its error is named when it is the only one.
-pub fn summary(results: &[RestoreResult]) -> String {
-    let count = |want: fn(&RestoreResult) -> bool| results.iter().filter(|r| want(r)).count();
-    let restored = count(|r| matches!(r, RestoreResult::Restored { .. }));
-    let not_running = count(|r| matches!(r, RestoreResult::NotRunning { .. }));
-    let failed: Vec<_> = results
-        .iter()
-        .filter_map(|r| match r {
-            RestoreResult::Failed { title, error } => Some((title, error)),
-            _ => None,
-        })
-        .collect();
-    let mut text = format!("{restored} restored · {not_running} not running · {} blocked", failed.len());
-    if let [(title, error)] = failed.as_slice() {
-        text.push_str(&format!(" ({title}: {error})"));
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Blocked {
+    pub title: String,
+    pub error: String,
+}
+
+/// After a restore, for the UI's InfoBar (worded there, in the UI language): counts plus each blocked window.
+/// Blocked = moving it failed, e.g. ERROR_ACCESS_DENIED for an elevated window (UIPI).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreSummary {
+    pub restored: usize,
+    pub not_running: usize,
+    pub blocked: Vec<Blocked>,
+}
+
+pub fn summary(results: &[RestoreResult]) -> RestoreSummary {
+    let mut out = RestoreSummary::default();
+    for result in results {
+        match result {
+            RestoreResult::Restored { .. } => out.restored += 1,
+            RestoreResult::NotRunning { .. } => out.not_running += 1,
+            RestoreResult::Failed { title, error } => out.blocked.push(Blocked {
+                title: title.clone(),
+                error: error.clone(),
+            }),
+        }
     }
-    text
+    out
 }
 
 fn launch_and_wait(snapshot: &WindowSnapshot, launch: &LaunchConfig) -> Result<(), String> {
@@ -287,7 +302,7 @@ fn wait_for(timeout: Duration, mut ready: impl FnMut() -> bool) -> Result<(), St
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err("timed out waiting for the launched app window".into());
+            return Err("timed out waiting for the launched app window".into()); // i18n-ok: internal, never shown
         }
         thread::sleep(Duration::from_millis(50));
     }
@@ -437,16 +452,16 @@ mod tests {
     }
 
     #[test]
-    fn summary_reports_blocked_windows_with_their_error() {
+    fn summary_counts_and_names_blocked_windows() {
         let ok = RestoreResult::Restored { title: "Docs".into() };
         let gone = RestoreResult::NotRunning { title: "Mail".into() };
         let denied = RestoreResult::Failed { title: "Admin tool".into(), error: "Access is denied. (os error 5)".into() };
-        assert_eq!(
-            summary(&[ok.clone(), ok.clone(), gone.clone(), denied.clone()]),
-            "2 restored · 1 not running · 1 blocked (Admin tool: Access is denied. (os error 5))"
-        );
-        assert_eq!(summary(&[denied.clone(), denied]), "0 restored · 0 not running · 2 blocked");
-        assert_eq!(summary(&[]), "0 restored · 0 not running · 0 blocked");
+        let s = summary(&[ok.clone(), ok, gone, denied]);
+        assert_eq!((s.restored, s.not_running), (2, 1));
+        assert_eq!(s.blocked, vec![Blocked { title: "Admin tool".into(), error: "Access is denied. (os error 5)".into() }]);
+        assert_eq!(summary(&[]), RestoreSummary::default());
+        let json = serde_json::to_string(&summary(&[])).unwrap();
+        assert_eq!(json, r#"{"restored":0,"notRunning":0,"blocked":[]}"#);
     }
 
     #[test]

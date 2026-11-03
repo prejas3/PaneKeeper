@@ -29,7 +29,7 @@ pub fn parse_hotkey(value: &str) -> Result<Hotkey, String> {
         .filter(|part| !part.is_empty())
         .collect();
     let Some(key_name) = parts.last() else {
-        return Err("shortcut is empty".into());
+        return Err("shortcut is empty".into()); // i18n-ok: internal, never shown
     };
     let mut modifiers = NO_REPEAT;
     for modifier in &parts[..parts.len() - 1] {
@@ -38,7 +38,7 @@ pub fn parse_hotkey(value: &str) -> Result<Hotkey, String> {
             "ctrl" | "control" => CTRL,
             "shift" => SHIFT,
             "win" | "meta" => WIN,
-            _ => return Err(format!("unknown modifier: {modifier}")),
+            _ => return Err(format!("unknown modifier: {modifier}")), // i18n-ok: internal, never shown
         };
     }
     let upper = key_name.to_ascii_uppercase();
@@ -48,10 +48,10 @@ pub fn parse_hotkey(value: &str) -> Result<Hotkey, String> {
         if (1..=24).contains(&number) {
             0x70 + number - 1
         } else {
-            return Err("function key must be F1..F24".into());
+            return Err("function key must be F1..F24".into()); // i18n-ok: internal, never shown
         }
     } else {
-        return Err(format!("unsupported key: {key_name}"));
+        return Err(format!("unsupported key: {key_name}")); // i18n-ok: internal, never shown
     };
     Ok(Hotkey { modifiers, key })
 }
@@ -104,7 +104,7 @@ mod platform {
             });
             CONTEXT
                 .set(context)
-                .map_err(|_| "event service is already running".to_string())?;
+                .map_err(|_| "event service is already running".to_string())?; // i18n-ok: internal, never shown
             let hwnd = Arc::new(Mutex::new(0));
             let thread_hwnd = hwnd.clone();
             let (ready_tx, ready_rx) = mpsc::channel();
