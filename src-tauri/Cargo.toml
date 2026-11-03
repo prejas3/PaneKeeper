@@ -1,6 +1,6 @@
 [package]
 name = "panekeeper"
-version = "0.1.0"
+version = "0.2.0"
 description = "Save and restore Windows app layouts"
 authors = ["Szymon Jankiewicz"]
 license = "MIT"

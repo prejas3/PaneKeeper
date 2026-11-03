@@ -214,7 +214,7 @@ function map(l: Layout) {
   const H = box.bottom - box.top;
   const pad = Math.max(W, H) * 0.02;
   // ~12px on screen: the map is drawn about this wide (card width, capped by its 300px height).
-  const drawn = Math.min((body?.clientWidth ?? 800) - 30, (300 * (W + pad * 2)) / (H + pad * 2));
+  const drawn = Math.min(pageWidth() - 30, (300 * (W + pad * 2)) / (H + pad * 2));
   const font = (12 * (W + pad * 2)) / Math.max(200, drawn);
   const primary = monitors.find((m) => m.primary) ?? monitors[0];
   const screen = (m: Monitor, kind: string) => {
@@ -262,6 +262,14 @@ function map(l: Layout) {
   // i18n-ok-end
 }
 
+/** Width inside the page padding. Not body.clientWidth: body is empty and hidden on a first render, so it reads 0. */
+function pageWidth() {
+  const page = content?.querySelector<HTMLElement>(".page");
+  if (!page) return 800;
+  const style = getComputedStyle(page);
+  return page.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+}
+
 const pages: Record<"settings" | "about", () => [string, string, string, string]> = {
   settings: () => {
     const s = store.settings;
@@ -297,7 +305,7 @@ const pages: Record<"settings" | "about", () => [string, string, string, string]
         <div><h1 class="t-subtitle">${APP}</h1><p class="t-caption t-2">${esc(version ? t.version(version) : "")}</p></div></div>
       <p class="t-2">${esc(t.aboutText)} ${esc(t.safety)}</p>
       <p><button type="button" class="link" data-act="open" data-k="${SITE}">${AUTHOR}</button></p>
-      ${group("", link("globe", t.projectPage, `${SITE}/p/panekeeper`) + link("code", t.source, REPO) + link("bug", t.issues, `${REPO}/issues`) + link("document", t.licence, `${REPO}/blob/main/LICENSE`))}`];
+      ${group("", link("globe", t.projectPage, `${SITE}/p/panekeeper`) + link("code", t.source, REPO) + link("bug", t.issues, `${REPO}/issues`) + link("document", t.licence, `${REPO}/blob/master/LICENSE`))}`];
   },
 };
 

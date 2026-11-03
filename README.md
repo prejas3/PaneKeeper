@@ -4,7 +4,13 @@ Put every window back where it belongs, with one shortcut.
 
 PaneKeeper saves the position, size and monitor of your app windows (browser, editor, chat, anything) as a named layout, and restores the whole layout when you press its shortcut. Built for multi-monitor desks: dock your laptop, press Ctrl+Alt+1, and everything is back.
 
-![PaneKeeper with a three-monitor layout](docs/screenshots/layout-light.png)
+![PaneKeeper with a three-monitor layout](docs/screenshot.png)
+
+<details><summary>Dark theme</summary>
+
+![PaneKeeper in the dark theme](docs/screenshot-dark.png)
+
+</details>
 
 ## How to use
 
@@ -18,9 +24,11 @@ Other things you can do:
 
 - **Update from current** replaces a layout's windows with how they sit right now, keeping your include and launch choices.
 - **Bind to this monitor setup** plus **Auto-restore on display change** (Settings) restores that layout by itself when those monitors connect.
-- **Pause** (tray or Settings) stops shortcuts and auto-restore; Restore now still works.
+- **Pause shortcuts** (tray or Settings) stops shortcuts and auto-restore; Restore now still works.
 - **Start with Windows** puts PaneKeeper in the tray when you sign in.
-- Light and dark themes follow Windows, or pick one.
+- **Deleted a layout by mistake?** Undo it from the message that follows.
+- **Polish and English**: window, tray menu and messages follow the Windows display language; switch it in Settings.
+- Light and dark themes follow Windows, or pick one. On Windows 11 the window uses Mica.
 
 ## Multiple monitors
 
@@ -41,7 +49,7 @@ Everything stays on your PC: layouts are a JSON file in `%APPDATA%\PaneKeeper`. 
 
 ## Install
 
-Download `PaneKeeper_0.1.0_x64-setup.exe` from the [releases](https://github.com/prejas3/PaneKeeper/releases). It installs for your user only (no admin prompt) and needs Windows 10 or 11 with WebView2 (built in on Windows 11). Uninstalling removes the autostart entry; your layouts stay in `%APPDATA%\PaneKeeper` until you delete the folder.
+Download `PaneKeeper_0.2.0_x64-setup.exe` from the [releases](https://github.com/prejas3/PaneKeeper/releases). It installs for your user only (no admin prompt), over 0.1.0 with your layouts kept, and needs Windows 10 or 11 with WebView2 (built in on Windows 11). Uninstalling removes the autostart entry; your layouts stay in `%APPDATA%\PaneKeeper` until you delete the folder.
 
 ## Development
 
@@ -57,8 +65,10 @@ Checks:
 
 - `cargo test` in `src-tauri`: matching, DPI and border math, missing-monitor mapping, store, shortcuts.
 - `cargo test -- --include-ignored`: also the live tests, which open, move and restore their own test windows (`src-tauri/examples/testwin.rs`).
-- `npm run e2e`: drives the real release exe through WebView2 DevTools, with its data in a temp folder. It only ever moves its own test windows.
+- `npm run e2e`: drives the real release exe through WebView2 DevTools, with its data in a temp folder. It only ever moves its own test windows. `E2E_KEEP=1` keeps its screenshots.
+- `npm run check:i18n`: every text exists in Polish and English, and no user-facing text sits outside the dictionaries (`src/i18n.ts`, `src-tauri/src/i18n.rs`).
+- `npm run notices -- --check`: `THIRD_PARTY_LICENSES.txt` (shipped in the installer) matches the dependency graph.
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE). Third-party licences: [THIRD_PARTY.md](THIRD_PARTY.md).
+MIT, see [LICENSE](LICENSE). Third-party licences: [THIRD_PARTY.md](THIRD_PARTY.md), full texts in [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt).

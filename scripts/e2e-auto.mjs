@@ -246,6 +246,7 @@ try {
   fs.writeFileSync(P("AppData/PaneKeeper/layouts.json"), JSON.stringify(edited, null, 1));
   ({ js, shot } = await launch());
   check("6. restart: layout and shortcut kept", await until(() => js(`return [...document.querySelectorAll(".nav-keys")].some((k) => k.textContent.replaceAll(" ", "") === ${JSON.stringify(SHORTCUT)})`)));
+  check("6. first render after restart: map labels at normal size", await until(() => js(`const h = document.querySelector(".label-name")?.getBoundingClientRect().height; return h > 0 && h < 24`)), await js(`return document.querySelector(".label-name")?.getBoundingClientRect().height`));
   check("5. missing monitor drawn dashed on the map", await until(() => js(`return document.querySelectorAll(".screen.missing").length === 1`)));
   await shot("02-missing-monitor.png");
   tw("move", A.title, primary.work[0] + 400, primary.work[1] + 300, primary.work[0] + 900, primary.work[1] + 700);
